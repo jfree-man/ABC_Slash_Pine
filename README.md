@@ -1,9 +1,10 @@
 # Estimating the Spatial Dynamics of Plant Recruitment using Approximate Bayesian Computation
 ## Supporting Data for MSc Thesis
-**Author:** Jennifer Freeman 
-**Supervisor:** Ben Bolker
-**Institution:** McMaster University, Hamilton, ON, Canada
-**Date:** June 3, 2023
+
+**Author:** Jennifer Freeman  
+**Supervisor:** Ben Bolker  
+**Institution:** McMaster University, Hamilton, ON, Canada   
+**Date:** June 3, 2023  
 
 ---
 
