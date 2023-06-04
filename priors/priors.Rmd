@@ -1,0 +1,863 @@
+---
+title: "Priors"
+date: "2022-10-25"
+---
+
+Visualizing choice of priors.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r,include=FALSE,message=FALSE,echo=FALSE}
+## From: https://github.com/bbolker/bbmisc/blob/master/powexp_prior.R
+## https://cran.r-project.org/web/packages/gnorm/vignettes/gnormUse.html
+#' @param lwr lower (loose) bound
+#' @param upr upper (loose) bound
+#' @param tail_prob prob outside {lwr, upr}
+#' @param ctr_prob probability of being in the middle 50\%  of {lwr, upr}
+#' @examples
+#' get_gnorm()  ## default; gaussian with sd=1
+#' get_gnorm(tail_prob=0.01, ctr_prob=0.6)
+#' ## set prior approx between 1 and 1000 (log scale)
+#' (p <- get_gnorm(lwr=log(1), upr=log(1000), tail_prob=0.01, ctr_prob=0.55))
+#' fx <- function(x) do.call("dgnorm", c(list(exp(x)), as.list(p)))
+#' curve(fx, from=log(0.5), to=log(1200), n=501)
+#' abline(v=c(0,log(1000)), lty=2)
+#' brks <- outer(c(1,2,5),c(1,10,100))
+#' axis(side=3, at=log(brks), labels=brks)
+get_gnorm <- function(lwr=-1, upr=1, tail_prob=2*pnorm(lwr),
+                      ctr_prob=abs(diff(pnorm(c(-1,1)*lwr/2)))) {
+  require("gnorm",quietly=TRUE)
+  ## default tail_prob/ctr_prob assume lwr/upr symmetric around 0 ...
+  ## start from Gaussian
+  ## desired alpha
+  sd <- abs(upr-lwr)/(-2*qnorm(tail_prob/2))
+  ## convert to sd (?pgnorm)
+  ## conversion factor: sqrt(1/(gamma(3/2)/(gamma(1/2))))
+  alpha <- sd*sqrt(2)
+  mu <- (lwr+upr)/2 ## symmetric, we don't have to estimate this
+  start <- c(alpha=alpha, beta=2)
+  tfun <- function(x) {
+    ## compute probability within range
+    pfun <- function(r) abs(diff(vapply(r,
+                                        function(z) do.call("pgnorm",c(list(z, mu=mu), as.list(x))),
+                                        FUN.VALUE=numeric(1))))
+    tail_obs <- 1-pfun(c(upr,lwr))
+    ctr_range <- c((mu+lwr)/2, (mu+upr)/2)
+    ctr_obs <- pfun(ctr_range)
+    return((tail_prob-tail_obs)^2 + (ctr_prob-ctr_obs)^2)
+  }
+  return(c(mu=mu,optim(par=start,fn=tfun)$par))
+}
+
+
+# if (FALSE) {
+#   png("dgn.png")
+#   curve(do.call("dgnorm", c(list(x), as.list(res))), from=-2, to=15, ylab="")
+#   dev.off()
+# }
+```
+
+```{r,include=FALSE}
+library(ggplot2)
+library(dplyr)
+library(gt)
+library(tidyr)
+```
+
+```{r data,echo=FALSE}
+load("../data/pine2.RData")
+```
+## Seeds
+
+```{r,echo=FALSE}
+##
+num_samples <- 1000
+logit <- qlogis
+
+## Matern scale
+#sc <- list()
+scale_log <- list()
+  p_scale<-get_gnorm(lwr=log(3), upr=log(50), tail_prob=0.05, ctr_prob=0.55)
+  #print(paste0(p_scale[1],", ",p_scale[2],", ",p_scale[3]))
+for (i in 1:num_samples){
+  scale_log[[i]] <- rgnorm(1,mu=p_scale[1],alpha=p_scale[2],beta=p_scale[3])
+  # scale back on original scale for matern function
+}
+  
+sc <- data.frame(scale=exp(unlist(scale_log)))
+scale_log <- data.frame(scale_log = unlist(scale_log))
+g_scale <- ggplot(sc,aes(x=scale))+geom_density(fill="#670000")+theme_bw()+xlab("scale")+theme(axis.text = element_text(size = 25),axis.title = element_text(size = 25)) 
+
+g_scale_log <- ggplot(scale_log,aes(x=scale_log))+geom_density(fill="#670000")+theme_bw()+xlab("log(scale)")+theme(axis.text = element_text(size = 25),axis.title = element_text(size = 25)) 
+
+
+tab_3 <-
+  dplyr::tibble(
+    `Seed Parameter` = "Matern Reparametrized Scale $$\\sim exp(GN(\\mu,\\sigma))$$ $$\\mu=(log(3)+log(50))/2$$ $$\\alpha \\approx 1.39 $$ $$\\beta \\approx 4.76$$ $$\\sigma^2=\\frac{\\alpha \\Gamma(3/\\beta)}{\\Gamma(1/\\beta)} \\approx 0.453$$ $$\\sigma \\approx 0.67$$",
+    Units = "m",
+    Reasoning="Using generalized-normal because we can make use of `get_gnorm` function to specify tail and centre probabilties with ranges, specifically we can specify how heavy we want the tails. Mean and sd are on the log scale. Generalized normal is symmetric, but on log-scale it is left-skewed which agrees with ecological knowledge that seed dispersal would occur on scales less than 60m. Lower and upper values in `get_gnorm` were set to approximately small and large distances between locations in the observed seed dataset (not many distances below 3m or above 50m) <br> We exponentiate to get the units back on the original scale (metres). $$\\alpha \\beta$$ are outputs from `get_gnorm` function, when beta is larger than 2 get heavier tails than gaussian, alpha relates to sd. Why not use log-normal, more control with GN distribution?",
+    Density = NA,
+    `Density (Original Scale)` = NA
+  ) %>%
+  gt() %>%
+  text_transform(
+    locations = cells_body(columns = Density),
+    fn = function(x) {
+      g_scale_log %>%
+       ggplot_image(height = px(200))
+    }
+  )%>% text_transform(
+    locations = cells_body(columns = `Density (Original Scale)`),
+    fn = function(x) {
+      g_scale %>%
+       ggplot_image(height = px(200),aspect_ratio = 2)
+    }) %>%   cols_width(
+    Reasoning ~ px(200),
+    Units ~ px(70),
+    `Seed Parameter` ~ px(200)
+  ) %>% tab_options(table.font.size=10) %>% fmt_markdown(columns = Reasoning)
+
+## Matern shape
+sh <- list()
+for (i in 1:num_samples){
+  sh[[i]]<- runif(n=1, min=0.5, max=4)
+}
+sh <- data.frame(shape=unlist(sh))
+g_shape <- ggplot(sh,aes(x=shape))+geom_density(fill="#670000")+theme_bw()
+#plot(seq(-10, 10, by = .1),dunif(seq(-10, 10, by = .1),min=0.5,max=4))
+tab_2 <-
+  dplyr::tibble(
+    `Seed Parameter` = "Matern Shape $$\\sim U(0.5,4)$$",
+    Units = "None?",
+    Reasoning = "Understanding plausible ecological values would be challenging. These are typical values used in geostatistical models, should describe what happens outside of this range.",
+    Density = NA
+  ) %>%
+  gt() %>%
+  text_transform(
+    locations = cells_body(columns = Density),
+    fn = function(x) {
+      g_shape %>%
+       ggplot_image(height = px(200))
+    }
+  ) %>%   cols_width(
+    Reasoning ~ px(200),
+    Units ~ px(70),
+    `Seed Parameter` ~ px(200)
+  ) %>% tab_options(table.font.size=10)
+
+## seed mean
+# m = log((mean(seeds$count+1)^2)/(sqrt(mean(seeds$count+1)^2+sd(seeds$count+1)^2)))
+m = log(median(seeds$count))
+#std = sqrt(log(1 + (sd(seeds$count+1)^2)/(mean(seeds$count+1)^2)))
+std = (log(40)-log(5))/4
+mu <- list()
+for (i in 1:num_samples){
+  mu[[i]]<-rnorm(n=1, mean = m, sd = std)
+}
+mu <- data.frame(mean=unlist(mu))
+g_mean <- ggplot(mu,aes(x=mean))+geom_density(fill="#670000")+theme_bw()+xlab("log(seed count)")+theme(axis.text = element_text(size = 25),axis.title = element_text(size = 25))   
+#expmu <- data.frame(mean=exp(mu$mean)-1)
+expmu <- exp(mu)
+g_expmean <- ggplot(expmu,aes(x=mean))+geom_density(fill="#670000")+theme_bw()+xlab("seed count")+theme(axis.text = element_text(size = 25),axis.title = element_text(size = 25)) 
+tab_1 <-
+  dplyr::tibble(
+        `Seed Parameter` = "Mean $$\\sim N(\\mu, \\sigma)$$ $$\\mu=\\log(10)$$ $$\\sigma=\\frac{\\log(40)-\\log(5)}{4}$$",
+    # `Seed Parameter` = "Mean $$\\sim N(\\mu, \\sigma)$$ $$\\mu=\\ln\\left(\\frac{\\mu_{seed \\, count +1}^2}{\\sqrt{\\mu_{seed \\,count+1}^2+\\sigma_{seed \\, count +1}^2}}\\right)$$ $$\\sigma=\\sqrt{\\ln\\left(1 + \\frac{\\sigma_{seed \\, count +1}^2}{\\mu_{seed \\, count +1}^2}\\right)}$$",
+    Units = "log of seed count",
+    Reasoning="Using log of seed count because median of seed count should be left-skewed, higher probability of lower counts? Median of observed seed count is 10. Using median because median of log-normal = log of median of normal  <br> Setting sd to range from a seed count of 5 to 40
+    Do I need to compute median of seed count + 1 or just median of seed count ? <br> Was using method
+    of moments for log-normal but I am not sure how this translates when
+    using the median and might be overkill."
+    # Using method of moments for log-normal to solve for the mean and sd for the log of the seed count + 1. Reversing this computation to see the mean prior on the original scale. <br> does it matter if I am running ABC not using the original scale (I don't think so because the summary statistics are scaled before distances are computed)?"
+    ,
+    Density = NA,
+    `Density (Original Scale)` = NA
+  ) %>%
+  gt() %>%
+  text_transform(
+    locations = cells_body(columns = Density),
+    fn = function(x) {
+      g_mean %>%
+       ggplot_image(height = px(200),aspect_ratio = 2)
+    }
+  ) %>%
+text_transform(
+    locations = cells_body(columns = `Density (Original Scale)`),
+    fn = function(x) {
+      g_expmean %>%
+       ggplot_image(height = px(200),aspect_ratio = 2)
+    }
+  )%>%   cols_width(
+    Reasoning ~ px(200),
+    Units ~ px(70),
+    `Seed Parameter` ~ px(200)
+  ) %>% tab_options(table.font.size=10) %>% fmt_markdown(columns = Reasoning)
+## Nugget proportion
+prop_nug <- list()
+for (i in 1:num_samples){
+  prop_nug[[i]] <- rnorm(n=1, mean=logit(0.1), sd=((logit(0.40))-(logit(0.01)))/4)
+}
+prop_nug <- data.frame(prop_nug=unlist(prop_nug))
+prop_nug_og <- exp(prop_nug)/(1+exp(prop_nug))
+g_propn <- ggplot(prop_nug,aes(x=prop_nug))+geom_density(fill="#670000")+theme_bw()+theme(axis.text = element_text(size = 25),axis.title = element_text(size = 25))+xlab("log odds")
+g_propn_og <- ggplot(prop_nug_og,aes(x=prop_nug))+geom_density(fill="#670000")+theme_bw()+theme(axis.text = element_text(size = 25),axis.title = element_text(size = 25)) + xlab("proportion")
+# prop_nug <- list()
+# prop_nug2 <- list()
+# for (i in 1:num_samples){
+# prop_nug[[i]] <- rlnorm(n=1,meanlog=sqrt(log(0.45)/log(0.01))*log(0.01),sdlog=sqrt(sqrt(log(0.45)/log(0.01))))
+# prop_nug2[[i]] <- rlnorm(n=1,meanlog=(log(0.01)+log(0.45))/2,sdlog=(log(0.45)-log(0.01))/4)
+# }
+# prop_nug <- data.frame(prop_nug=unlist(prop_nug))
+# prop_nug2 <- data.frame(prop_nug2=unlist(prop_nug2))
+# g_propn <- ggplot(prop_nug,aes(x=prop_nug))+geom_density(aes(fill="old prior"),alpha=0.5)+geom_density(data=prop_nug2, aes(x=prop_nug2,fill="new prior"),alpha=0.5)+theme_bw()
+tab_4 <-
+  dplyr::tibble(
+    `Seed Parameter` = "Nugget Proportion $$\\sim N(\\mu,\\sigma)$$ $$\\mu=logit(0.1)$$ $$\\sigma=\\frac{logit(0.4)-logit(0.01)}{4}$$",
+    Units = "proportion",
+    Reasoning="Proportion of variance described by small scale noise should be small, less than 50%. Want the mean propotion to range from 0.01 to 0.4, sd of (logit(0.4)-logit(0.01))/4 (2 standard deviations, 95% of data). For now, arbitrarily setting mean proportion to 0.1",
+    Density = NA,
+    `Density (Original Scale)` = NA
+    # `Seed Parameter` = "Nugget Proportion $$\\sim LN(\\mu,\\sigma)$$ $$\\mu=\\sqrt{\\frac{\\log(0.45)}{\\log(0.01)}}\\log(0.01)$$ $$\\sigma=\\sqrt{\\sqrt{\\frac{\\log(0.45)}{\\log(0.01)}}}$$",
+    # Units = "proportion",
+    # Reasoning="Choice of log-normal because proportion of variance described by small scale noise should be small, much less than 50% <br> Using scatter intervals for the log-normal distribution to solve for mean and sd given that we want 95% of the data in 0.01 to 0.45, starting with geometric parameters this becomes to, $$[\\log(0.01),\\log(0.45)]=[\\mu-2\\sigma,\\mu = 2 \\sigma]$$ $$\\mu=\\frac{\\log(0.01)+\\log(0.45)}{2}$$ $$\\sigma=\\frac{\\log(0.45)-\\log(0.01)}{4}$$ <br> believe I was interpreting the mean and sd incorrectly orginally, taking geometric parameters to be equal to the distribution parameters. The new prior shown in the plit uses this updated calculation.",
+    # Density = NA
+  ) %>%
+  gt() %>%
+  text_transform(
+    locations = cells_body(columns = Density),
+    fn = function(x) {
+      g_propn %>%
+       ggplot_image(height = px(200))
+    }
+  ) %>% text_transform(
+    locations = cells_body(columns = `Density (Original Scale)`),
+    fn = function(x) {
+      g_propn_og %>%
+       ggplot_image(height = px(200),aspect_ratio = 2)
+    }) %>%   cols_width(
+    Reasoning ~ px(200),
+    Units ~ px(70),
+    `Seed Parameter` ~ px(200)
+  ) %>% tab_options(table.font.size=10) %>% fmt_markdown(columns = Reasoning)
+
+## var
+total_cv <- list()
+for (i in 1:num_samples){
+total_cv[[i]] <- rnorm(n=1,mean=log(0.25),sd=(log(0.90)-log(0.1))/4)
+}
+total_cv <- data.frame(total_cv=unlist(total_cv))
+g_totalcv <- ggplot(total_cv,aes(x=total_cv))+geom_density(fill="#670000")+theme_bw()+theme(axis.text = element_text(size = 25),axis.title = element_text(size = 25))+xlab("log(sd)")
+g_totalcv_og <- ggplot(exp(total_cv),aes(x=total_cv))+geom_density(fill="#670000")+theme_bw()+theme(axis.text = element_text(size = 25),axis.title = element_text(size = 25)) + xlab("sd")
+tab_5 <-
+  dplyr::tibble(
+    `Seed Parameter` = "Standard Deviation $$\\sim N(\\mu,\\sigma)$$ $$\\mu=\\log(0.25)$$ $$\\sigma=\\frac{\\log(0.95) - \\log(0.05)}{4}$$",
+    Units = "sd of log(seed count)",
+    Reasoning="Using the fact that log of sd(seed count) is approximately the cv of seed count. It seems reasonable for the CV to range from 5% to 95%, with a mean of 25%. See the generation of seed count distributions below, distributions seem approximately reasonable.",
+    Density = NA,
+    `Density (Original Scale)` = NA
+  ) %>%
+  gt() %>%
+  text_transform(
+    locations = cells_body(columns = Density),
+    fn = function(x) {
+      g_totalcv %>%
+       ggplot_image(height = px(200))
+    }
+  ) %>% text_transform(
+    locations = cells_body(columns = `Density (Original Scale)`),
+    fn = function(x) {
+      g_totalcv_og %>%
+       ggplot_image(height = px(200),aspect_ratio = 2)
+    }) %>%   cols_width(
+    Reasoning ~ px(200),
+    Units ~ px(70),
+    `Seed Parameter` ~ px(200)
+  ) %>% tab_options(table.font.size=10)
+
+```
+
+
+```{r table,echo=FALSE}
+
+
+
+tab_1
+
+tab_2
+
+tab_3
+
+tab_4
+
+tab_5
+# 
+# fullTable = rbind(tab_1$`_data`, tab_2$`_data`)
+# 
+# 
+# #Create the gt object again for the merged table
+# gtTable = gt(fullTable) %>%
+#   tab_row_group(
+#     group = "Label 1",
+#     rows = 1
+#   ) %>% 
+#   tab_row_group(
+#     group = "Label 2",
+#     rows = 2
+#   )
+# gtTable
+```
+
+## Establishment
+
+```{r,echo=FALSE}
+##
+num_samples <- 1000
+
+## Matern scale
+scale_log <- list()
+  p_scale<-get_gnorm(lwr=log(3), upr=log(50), tail_prob=0.005, ctr_prob=0.55)
+  #print(paste0(p_scale[1],", ",p_scale[2],", ",p_scale[3]))
+for (i in 1:num_samples){
+  scale_log[[i]] <- rgnorm(1,mu=p_scale[1],alpha=p_scale[2],beta=p_scale[3])
+  # scale back on original scale for matern function
+}
+  
+sc <- data.frame(scale=exp(unlist(scale_log)))
+scale_log <- data.frame(scale_log = unlist(scale_log))
+g_scale <- ggplot(sc,aes(x=scale))+geom_density(fill="#670000")+theme_bw()+xlab("scale")+theme(axis.text = element_text(size = 25),axis.title = element_text(size = 25)) 
+
+g_scale_log <- ggplot(scale_log,aes(x=scale_log))+geom_density(fill="#670000")+theme_bw()+xlab("log(scale)")+theme(axis.text = element_text(size = 25),axis.title = element_text(size = 25)) 
+
+tab_3 <-
+  dplyr::tibble(
+    `Establishment Parameter` = "Matern Reparametrized Scale $$\\sim exp(GN(\\mu,\\sigma))$$ $$\\mu=(log(3)+log(50))/2$$ $$\\alpha \\approx 1.33 $$ $$\\beta \\approx 12.24$$ $$\\sigma^2=\\frac{\\alpha \\Gamma(3/\\beta)}{\\Gamma(1/\\beta)} \\approx 0.42$$ $$\\sigma \\approx 0.65$$",
+    Units = "m",
+    Reasoning="Similar to seed prior. Restricted to scales that data is on. The tail is fatter because we have less information of scale of environemntal patches. Maybe this should be more supported by literature evidence - scales of environmental filtering",
+    Density = NA,
+    `Density (Original Scale)` = NA
+  ) %>%
+  gt() %>%
+  text_transform(
+    locations = cells_body(columns = Density),
+    fn = function(x) {
+      g_scale_log %>%
+       ggplot_image(height = px(200))
+    }
+  )%>% text_transform(
+    locations = cells_body(columns = `Density (Original Scale)`),
+    fn = function(x) {
+      g_scale %>%
+       ggplot_image(height = px(200))
+    }
+  )%>%  cols_width(
+    Reasoning ~ px(200),
+    Units ~ px(70),
+    `Establishment Parameter` ~ px(200)
+  ) %>% tab_options(table.font.size=10) %>% fmt_markdown(columns = Reasoning)
+
+## Matern shape
+sh <- list()
+for (i in 1:num_samples){
+  sh[[i]]<- runif(n=1, min=0.5, max=4)
+}
+sh <- data.frame(shape=unlist(sh))
+g_shape <- ggplot(sh,aes(x=shape))+geom_density(fill="#670000")+theme_bw()+theme(axis.text = element_text(size = 25),axis.title = element_text(size = 25)) 
+#plot(seq(-10, 10, by = .1),dunif(seq(-10, 10, by = .1),min=0.5,max=4))
+tab_2 <-
+  dplyr::tibble(
+    `Establishment Parameter` = "Matern Shape $$\\sim U(0.5,4)$$",
+    Units = "None?",
+    Reasoning = "Same as seed prior.",
+    Density = NA
+  ) %>%
+  gt() %>%
+  text_transform(
+    locations = cells_body(columns = Density),
+    fn = function(x) {
+      g_shape %>%
+       ggplot_image(height = px(200))
+    }
+  ) %>%   cols_width(
+    Reasoning ~ px(200),
+    Units ~ px(70),
+    `Establishment Parameter` ~ px(200)
+  ) %>% tab_options(table.font.size=10)
+
+## establishment mean
+mu <- list()
+
+for (i in 1:num_samples){
+  mu[[i]] <- rnorm(n=1, mean=logit(0.1), sd=((logit(0.5))-(logit(0.01)))/4)
+}
+mu <- data.frame(mean=unlist(mu))
+g_mean <- ggplot(mu,aes(x=mean))+geom_density(fill="#670000")+theme_bw()+xlab("log odds")+theme(axis.text = element_text(size = 25),axis.title = element_text(size = 25))   
+p <- data.frame(prob=(exp(mu)/(1+exp(mu))))
+g_pmean <- ggplot(p,aes(x=mean))+geom_density(fill="#670000")+theme_bw()+xlab("probability")+theme(axis.text = element_text(size = 25),axis.title = element_text(size = 25))   
+tab_1 <-
+  dplyr::tibble(
+    `Establishment Parameter` = "Mean $$\\sim N(\\mu, \\sigma)$$ $$\\mu=logit(0.1)$$ $$\\sigma=\\frac{logit(0.5)-logit(0.01)}{4}$$",
+    Units = "log odds",
+    Reasoning="Probability of seed establishing should be less than 50%, trees drop many more seeds than result in established plants. Very crude measurement, average of observed seedling count divided by average of observed seed count approx 0.064, setting mean to 10% on probability scale logit(0.1). Want the mean to range from 0.01 to 0.5 on the probability scale, sd of (logit(0.5)-logit(0.01))/4 (2 standard deviations, 95% of data). See generation of establishment distribution before, seems reasonable, may need some tweaking.",
+    Density = NA,
+    `Density (Original Scale)` = NA
+  ) %>%
+  gt() %>%
+  text_transform(
+    locations = cells_body(columns = Density),
+    fn = function(x) {
+      g_mean %>%
+       ggplot_image(height = px(200),aspect_ratio = 2)
+    }
+  ) %>%
+  text_transform(
+    locations = cells_body(columns = `Density (Original Scale)`),
+    fn = function(x) {
+      g_pmean %>%
+       ggplot_image(height = px(200),aspect_ratio = 2)
+    }
+  ) %>%   cols_width(
+    Reasoning ~ px(200),
+    Units ~ px(70),
+    `Establishment Parameter` ~ px(200)
+  ) %>% tab_options(table.font.size=10) %>% fmt_markdown(columns = Reasoning)
+
+## Nugget proportion
+prop_nug <- list()
+for (i in 1:num_samples){
+  prop_nug[[i]] <- rnorm(n=1, mean=logit(0.1), sd=((logit(0.40))-(logit(0.01)))/4)
+}
+prop_nug <- data.frame(prop_nug=unlist(prop_nug))
+prop_nug_og <- exp(prop_nug)/(1+exp(prop_nug))
+g_propn <- ggplot(prop_nug,aes(x=prop_nug))+geom_density(fill="#670000")+theme_bw()+theme(axis.text = element_text(size = 25),axis.title = element_text(size = 25))+xlab("log odds")
+g_propn_og <- ggplot(prop_nug_og,aes(x=prop_nug))+geom_density(fill="#670000")+theme_bw()+theme(axis.text = element_text(size = 25),axis.title = element_text(size = 25)) + xlab("proportion")
+# +geom_density(aes(fill="old prior"),alpha=0.5)+geom_density(data=prop_nug2, aes(x=prop_nug2,fill="new prior"),alpha=0.5)+theme_bw()
+tab_4 <-
+  dplyr::tibble(
+    `Establishment Parameter` = "Nugget Proportion $$\\sim N(\\mu,\\sigma)$$ $$\\mu=logit(0.1)$$ $$\\sigma=\\frac{logit(0.4)-logit(0.01)}{4}$$",
+    Units = "proportion",
+    Reasoning="Same as seed prior.",
+    Density = NA,
+    `Density (Original Scale)` = NA
+  ) %>%
+  gt() %>%
+  text_transform(
+    locations = cells_body(columns = Density),
+    fn = function(x) {
+      g_propn %>%
+       ggplot_image(height = px(200))
+    }
+  ) %>% text_transform(
+    locations = cells_body(columns = `Density (Original Scale)`),
+    fn = function(x) {
+      g_propn_og %>%
+       ggplot_image(height = px(200),aspect_ratio = 2)
+    }) %>%   cols_width(
+    Reasoning ~ px(200),
+    Units ~ px(70),
+    `Establishment Parameter` ~ px(200)
+  ) %>% tab_options(table.font.size=10) %>% fmt_markdown(columns = Reasoning)
+
+## sd
+sd <- list()
+sd2 <- list()
+logsd<-list()
+for (i in 1:num_samples){
+  sd[[i]] <- rlnorm(n=1,meanlog=log(0.5),sdlog=(log(4)-log(0.1))/4)
+  sd2[[i]] <- rlnorm(n=1,meanlog=1,sdlog=(3-0.3)/4)
+  logsd[[i]] <- rnorm(n=1, mean=log(1), sd=(log(3.5)-log(0.5))/4)
+#sd[[i]] <- rlnorm(n=1,meanlog=sqrt(log(0.95)/log(0.001))*log(0.001),sdlog=sqrt(sqrt(log(0.95)/log(0.001))))
+}
+#sd <- exp(unlist(logsd)
+sd <- data.frame(sd=exp(unlist(logsd)))
+sd2 <- data.frame(sd2=unlist(sd2))
+logsd <- data.frame(logsd=unlist(logsd))
+# g_sd <- ggplot(sd,aes(x=sd))+
+#   geom_density(aes(fill="#670000"),alpha=0.5)+
+#   theme_bw()+
+#   geom_density(data=sd2,aes(x=sd2,fill="new"),alpha=0.5)#+theme_bw()
+g_sd2 <- ggplot(sd2,aes(x=sd2))+geom_density(fill="#670000")+theme_bw()+xlab("log sd")+theme(axis.text = element_text(size = 25),axis.title = element_text(size = 25)) 
+g_sd <- ggplot(sd,aes(x=sd))+geom_density(fill="#670000")+theme_bw()+xlab("log(sd) on log odds")+theme(axis.text = element_text(size = 25),axis.title = element_text(size = 25)) 
+g_logsd <- ggplot(logsd,aes(x=logsd))+geom_density(fill="#670000")+theme_bw()+xlab("sd on log odds")+theme(axis.text = element_text(size = 25),axis.title = element_text(size = 25)) 
+tab_5 <-
+  dplyr::tibble(
+    `Establishment Parameter` = "Standard Deviation $$N(\\mu, \\sigma)$$ $$\\mu=\\log(1)$$ $$\\sigma=\\frac{\\log(3.5)-\\log(0.5)}{4}$$",
+    Units = "log(sd on log-odds)",
+    Reasoning="Using log-normal so that sd is always positive. Randomly setting log-odds change of 1, is moderate - set to the mean. Want sd to range from 0.5 to 3 on log-odds scale. 95% data in -0.5/3?",
+    Density = NA,
+    `Density (Original Scale)` = NA
+  ) %>%
+  gt() %>%
+  text_transform(
+    locations = cells_body(columns = Density),
+    fn = function(x) {
+      g_logsd %>%
+       ggplot_image(height = px(200))
+    }
+  ) %>%
+text_transform(
+    locations = cells_body(columns = `Density (Original Scale)`),
+    fn = function(x) {
+      g_sd %>%
+       ggplot_image(height = px(200))
+    }
+  )%>%   cols_width(
+    Reasoning ~ px(200),
+    Units ~ px(70),
+    `Establishment Parameter` ~ px(200)
+  ) %>% tab_options(table.font.size=10)
+
+```
+
+
+```{r table2,echo=FALSE}
+
+
+
+
+
+tab_2
+
+tab_3
+
+tab_4
+tab_1
+tab_5
+```
+
+
+## Prior Predictive Checks
+
+### Mean Establishment Probability
+
+$logit(p_i) \sim N(\mu_i,\sigma_i)$
+
+```{r}
+mu_i <- list()
+sigma_i <- list()
+logitp_i <- list()
+q <- list()
+
+seed_base <- 111
+for (i in 1:1000){
+  
+  set.seed(seed_base+i)
+  
+  #sample mu_i
+  mu_i[[i]]<-rnorm(n=1, mean=logit(0.1), sd=((logit(0.5))-(logit(0.01)))/4)
+  
+  #sample sigma_i
+  sigma_i[[i]]<-rnorm(n=1, mean=log(1), sd=(log(3.5)-log(0.5))/4)
+  
+  #sample logit(e_i), compute quantiles
+  logitp_i[[i]] <- rnorm(1000,mean=mu_i[[i]],sd=exp(sigma_i[[i]]))
+  q[[i]] <- quantile(logitp_i[[i]],probs=c(0.1,0.9))
+}
+sum_q <- (bind_rows(q)
+          %>% pivot_longer(cols=everything(),names_to = "quantile",values_to = "value"))
+
+# look at quantiles
+(ggplot(sum_q,aes(x=value,fill=quantile))+geom_density(alpha=0.5))
+
+
+# look at distributions from 10 random samples
+names(logitp_i)=seq(1,length(logitp_i),by=1)
+all_dist <- (sample(logitp_i,10)
+             %>% bind_rows()
+             %>% pivot_longer(cols=everything(),names_to = "dist",values_to = "value")
+)
+
+(ggplot(all_dist, aes(x=value,col=dist))+geom_density())
+```
+
+### Mean Seed Count
+
+$\log(seed count_i) \sim N(\mu_i,\sigma_i)$
+These results look fairly reasonable, it's possible the sd is a little large. The mean is really the median...Not clear whether I am including the sd in the distribution appropriately (exponentiating sd on the log scale to use in a log-normal?)
+```{r}
+#sdlog - 1 seems large, 1.5 too large, 0.1 seems smallish
+# g <- rnorm(100,mean=log(10),sd=(log(40)-log(5))/4)
+# t <- rnorm(100,mean=log(0.2),sd=(log(0.95)-log(0.01))/4)
+seed_sd <- rnorm(n=1000,mean=log(0.25),sd=(log(0.90)-log(0.1))/4)
+# but sd(log of seed count) \approx cv of seed count
+seed_mu <- rnorm(n=1000, mean = log(median(seeds$count)), sd = (log(40)-log(5))/4)
+
+# seed_sd_log <- exp(seed_sd^2-1)*exp(2*seed_mu+seed_sd^2)
+# seed_mu_log <- exp(seed_mu + (seed_sd^2)/2)
+#
+# seed_sd <- rnorm(n=1000,mean=5,sd=(10-1)/4)
+# # but sd(log of seed count) \approx cv of seed count
+# seed_mu <- rnorm(n=1000, mean = 10, sd = (40-5)/4)
+
+#seed_cv <- rnorm(n=1000,mean=log(0.5),sd=(log(1)-log(0.01))/4)
+#solve for sd
+#seed_sd <- exp(seed_mu)*exp(seed_cv)
+#solve for cv
+# seed_cv <- exp(seed_sd)/exp(seed_mu)
+seed_count <- list()
+q <- list()
+for (i in 1:1000){
+    # seed_count[[i]] <- rnorm(1000,mean=seed_mu[i],sd=seed_sd[i])
+  
+  seed_count[[i]] <- exp(rnorm(1000,mean=seed_mu[i],sd=exp(seed_sd[i])))
+
+
+  #seed_count[[i]] <- rlnorm(1000,meanlog=seed_mu[i],sdlog=exp(seed_sd[i]))
+  
+    # seed_count[[i]] <- rlnorm(1000,meanlog=seed_mu_log[i],sdlog=seed_sd_log[i])
+  
+  q[[i]] <- quantile(seed_count[[i]],probs=c(0.1,0.9))
+}
+# hist(unlist(seed_count))
+# hist(exp(unlist(seed_count)),breaks=100)
+sum_q <- (bind_rows(q)
+          %>% pivot_longer(cols=everything(),names_to = "quantile",values_to = "value"))
+
+# look at quantiles
+(ggplot(sum_q,aes(x=value,fill=quantile))+geom_density(alpha=0.5))
+
+
+# look at distributions of 10 random samples
+names(seed_count)=seq(1,length(seed_count),by=1)
+all_dist <- (sample(seed_count,10)
+             %>% bind_rows()
+             %>% pivot_longer(cols=everything(),names_to = "dist",values_to = "value")
+)
+
+(ggplot(all_dist, aes(x=value,col=dist))+geom_density())
+```
+
+## Investigating reparametrization of Matérn
+
+$$\alpha=2\phi\sqrt{\kappa}$$
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+source("../general/functions.R")
+# split seed data by plot
+seeds_by_plot <- split(seeds, f=seeds$plot)
+seeds_u <- lapply(seeds_by_plot, function(z)
+{(z
+  %>% select(x,y)
+  %>% dist()
+)})
+
+# vector of all distances
+u <- unlist(seeds_u)
+
+sh <- c(0.5,1.5,3)
+sc <- c(0.1,1,10,25)
+# all parameter combinations
+sc_sh <- expand_grid(sc,sh)
+params <- (sc_sh
+           %>% mutate(`(scale, shape)` = paste0("(",sc,",",sh,")"))
+           %>% select(`(scale, shape)`)
+           %>% pull()
+           
+)
+
+# make distances simpler
+u <- seq(0.1,100,by=0.01)
+
+# compute correlation
+corr_u<-apply(sc_sh,1,function(x){corr_matern(x[1],x[2],u)})
+dat <- data.frame(cbind(u,corr_u))
+names(dat) <- c("u",params)
+
+#compute alpha from reparametrization
+sc_sh <- (sc_sh
+          %>% mutate(alpha=2*sc*sqrt(sh))
+          #%>% mutate(alpha=sqrt(8)*sqrt(sh)/sc)
+          %>% mutate(`(scale, shape)` = paste0("(",sc,",",sh,")"))
+)
+
+dat <- (dat
+        %>% pivot_longer(cols=-u,names_to="(scale, shape)", values_to="correlation")
+)
+
+corr_at_alpha <- list()
+for (i in 1:(nrow(sc_sh))){
+  line <- (dat 
+           %>% filter(`(scale, shape)`==sc_sh$`(scale, shape)`[i])
+           %>% unique()
+  )
+  # get correlation for specified value of alpha via interpolation
+  corr_at_alpha[[i]] <- approx(x=line$u,
+                          y=line$correlation,
+                          xout=sc_sh$alpha[i])
+}
+
+corr_at_alpha <- bind_rows(corr_at_alpha)
+
+(ggplot(dat, aes(u,correlation, colour = `(scale, shape)`))
+  + geom_line()
+  + theme_bw()
+  + geom_point(data=corr_at_alpha, aes(x=x,y=y),inherit.aes=FALSE)
+  + ggtitle("Correlation at alpha distance")
+  #+ scale_y_log10()
+)
+
+
+```
+
+Correlation looks approximately constant around $\approx 0.3$ for all $\alpha$ values.
+
+
+Simulating seeds at the same spatial locations using Matern with specified values of $\alpha$. Interpreting $\alpha$ as patch size.
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+#$$\alpha=2\phi\sqrt{\kappa}$$
+library(geoR)
+library(ggh4x)
+alpha <- c(5,10,20,40)
+kappa <- c(1.5)
+
+params <- expand.grid(alpha=alpha,kappa=kappa)
+phi <- (params$alpha/(2*sqrt(params$kappa)))
+
+
+# very rough estimates from looking at variogram
+# # nugget variance
+nugget_var <- 0.1
+# sum of nugget and signal variance
+sill <- 0.4
+mu=log(10) 
+# random coordinates
+x_coord <- seq(0,60,by=0.01)
+y_coord <- seq(0,60,by=0.01)
+grid_coord <- expand.grid(x_coord=x_coord,y_coord=y_coord) %>% sample_n(100)
+
+
+
+# generate grf
+grf_output <- list()
+data_to_plot <- list()
+for(i in 1:nrow(params)){
+  # simulate GRF
+grf_output[[i]] <-      grf(n=100,
+                            grid=grid_coord,
+          #grid="irreg",
+          # xlims=c(0,60),
+          # ylims=c(0,60),
+          cov.pars = c(sill,phi[i]),
+          cov.model="matern",
+          kappa=params$kappa[i],
+          nugget=nugget_var,
+          messages=FALSE
+          )
+  # poisson means from seed dispersal model
+  mu_i <- exp(mu + grf_output[[i]]$data)
+  
+  data_to_plot[[i]]<-data.frame(grf_output[[i]]$coords,
+                        data=rpois(n=nrow(grf_output[[i]]$coords),lambda=mu_i),# compute seed counts
+                        alpha=alpha[i])
+
+# data_to_plot[[i]] <- data.frame(grf_output[[i]]$coords,
+#                                 data=grf_output[[i]]$data,
+#                                 alpha=alpha[i])
+
+}
+
+
+# data_to_plot <- lapply(data_to_plot,function(i){
+#   cbind(i,grf_output[[1]]$coords*60)})
+data_to_plot <- bind_rows(data_to_plot)
+
+ggplot(data_to_plot, aes(x=x_coord,y=y_coord
+                         ,size=data
+                         #,color=data
+                         ))+
+  geom_point(
+    alpha=0.5
+    )+
+  #scale_size(range=c(0.1,5))+
+  scale_size_area()+
+  #scale_colour_continuous(type="viridis")+
+  
+  theme_bw()+
+  facet_wrap(~alpha,scales = "free")+
+ggh4x::facetted_pos_scales(x = list(
+  alpha == 5 ~ scale_x_continuous(breaks=seq(0,60,by=5),minor_breaks=NULL),
+  alpha == 10 ~ scale_x_continuous(breaks=seq(0,60,by=10),minor_breaks=NULL),
+  alpha == 20 ~ scale_x_continuous(breaks=seq(0,60,by=20),minor_breaks=NULL),
+  alpha == 40 ~ scale_x_continuous(breaks=seq(0,60,by=40),minor_breaks=NULL)
+),y = list(
+  alpha == 5 ~ scale_y_continuous(breaks=seq(0,60,by=5),minor_breaks=NULL),
+  alpha == 10 ~ scale_y_continuous(breaks=seq(0,60,by=10),minor_breaks=NULL),
+  alpha == 20 ~ scale_y_continuous(breaks=seq(0,60,by=20),minor_breaks=NULL),
+  alpha == 40 ~ scale_y_continuous(breaks=seq(0,60,by=40),minor_breaks=NULL)
+))
+
+
+```
+
+Difficult to see patches in this way, What if I used a regular grid instead.
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+
+x_coord <- seq(0,60,by=5)
+y_coord <- seq(0,60,by=5)
+grid_coord <- expand.grid(x_coord=x_coord,y_coord=y_coord) #%>% sample_n(100)
+
+
+# generate grf
+grf_output <- list()
+data_to_plot <- list()
+for(i in 1:nrow(params)){
+grf_output[[i]] <-      grf(n=100,
+                            grid=grid_coord,
+          #grid="irreg",
+          # xlims=c(0,60),
+          # ylims=c(0,60),
+          cov.pars = c(sill,phi[i]),
+          cov.model="matern",
+          kappa=params$kappa[i],
+          nugget=nugget_var,
+          messages=FALSE
+          )
+
+  mu_i <- exp(mu + grf_output[[i]]$data)
+  
+  data_to_plot[[i]]<-data.frame(grf_output[[i]]$coords,
+                        data=rpois(n=nrow(grf_output[[i]]$coords),lambda=mu_i),
+                        alpha=alpha[i])
+
+# data_to_plot[[i]] <- data.frame(grf_output[[i]]$coords,
+#                                 data=grf_output[[i]]$data,
+#                                 alpha=alpha[i])
+
+}
+
+
+# data_to_plot <- lapply(data_to_plot,function(i){
+#   cbind(i,grf_output[[1]]$coords*60)})
+data_to_plot <- bind_rows(data_to_plot)
+
+ggplot(data_to_plot, aes(x=x_coord,y=y_coord
+                         ,size=data
+                         #,color=data
+                         ))+
+  geom_point(
+    alpha=0.5
+    )+
+  #scale_size(range=c(0.1,5))+
+  scale_size_area()+
+  #scale_colour_continuous(type="viridis")+
+  
+  theme_bw()+
+  facet_wrap(~alpha,scales = "free")+
+ggh4x::facetted_pos_scales(x = list(
+  alpha == 5 ~ scale_x_continuous(breaks=seq(0,60,by=5),minor_breaks=NULL),
+  alpha == 10 ~ scale_x_continuous(breaks=seq(0,60,by=10),minor_breaks=NULL),
+  alpha == 20 ~ scale_x_continuous(breaks=seq(0,60,by=20),minor_breaks=NULL),
+  alpha == 40 ~ scale_x_continuous(breaks=seq(0,60,by=40),minor_breaks=NULL)
+),y = list(
+  alpha == 5 ~ scale_y_continuous(breaks=seq(0,60,by=5),minor_breaks=NULL),
+  alpha == 10 ~ scale_y_continuous(breaks=seq(0,60,by=10),minor_breaks=NULL),
+  alpha == 20 ~ scale_y_continuous(breaks=seq(0,60,by=20),minor_breaks=NULL),
+  alpha == 40 ~ scale_y_continuous(breaks=seq(0,60,by=40),minor_breaks=NULL)
+))
+
+```
+
+More obvious that $\alpha$ is approximate patch size.
